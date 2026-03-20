@@ -27,7 +27,7 @@ public class ReviewController {
     }
 
     @PostMapping("/github-review")
-    public Object reviewGithub(@RequestBody Map<String, String> request){
+    public Map<String, Object> reviewGithub(@RequestBody Map<String, String> request) throws Exception{
         return githubService.fetchRepo(request.get("repo_url"));
     }
 }
