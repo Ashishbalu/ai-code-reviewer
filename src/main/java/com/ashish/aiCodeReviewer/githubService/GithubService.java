@@ -2,6 +2,7 @@ package com.ashish.aiCodeReviewer.githubService;
 
 import com.ashish.aiCodeReviewer.ai.OllamaClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -15,8 +16,12 @@ import java.util.List;
 import java.util.Map;
 
 @Service
+
 public class GithubService {
     private final OllamaClient ollamaClient;
+
+    @Value("${github.token}")
+    private String githubToken;
 
     public GithubService(OllamaClient ollamaClient) {
         this.ollamaClient = ollamaClient;
@@ -54,7 +59,7 @@ public class GithubService {
                              List<Object> allImprovements,
                              ObjectMapper mapper) throws Exception {
         HttpHeaders headers = new HttpHeaders();
-        headers.set("Authorization", "Bearer YOUR_GITHUB_TOKEN");
+        headers.set("Authorization", "Bearer " + githubToken);
         headers.set("Accept", "application/vnd.github.v3+json");
         HttpEntity<String> entity = new HttpEntity<>(headers);
         ResponseEntity<List> response = restTemplate.exchange(
@@ -75,7 +80,7 @@ public class GithubService {
 
             // Recursioin
             if ("dir".equals(type)) {
-                if (fileCount >= 5) {
+                if (fileCount >= 10) {
                     return;
                 }
                 processFile(file.get("url").toString(),
@@ -89,7 +94,7 @@ public class GithubService {
                 if (!path.contains("/src/")) {
                     continue;
                 }
-                if (fileCount >= 5) {
+                if (fileCount >= 10) {
                     return;
                 }
                 fileCount++;
@@ -97,7 +102,13 @@ public class GithubService {
                 String fileName = file.get("name").toString();
                 String downloadUrl = file.get("download_url").toString();
 
-                String code = restTemplate.getForObject(downloadUrl, String.class);
+                ResponseEntity<String> fileResponse = restTemplate.exchange(
+                        downloadUrl,
+                        HttpMethod.GET,
+                        entity,
+                        String.class
+                );
+                String code = fileResponse.getBody();
                 System.out.println("processing java file " + fileName);
                 if (code.length() > 3000) {
                     code = code.substring(0, 3000);
