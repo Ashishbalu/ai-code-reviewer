@@ -2,6 +2,7 @@ package com.ashish.aiCodeReviewer.githubService;
 
 import com.ashish.aiCodeReviewer.ai.OllamaClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -14,11 +15,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
+@Slf4j
 @Service
 
 public class GithubService {
     private final OllamaClient ollamaClient;
+
 
     @Value("${github.token}")
     private String githubToken;
@@ -28,10 +32,8 @@ public class GithubService {
     }
 
     private final RestTemplate restTemplate = new RestTemplate();
-    int fileCount;
 
     public Map<String, Object> fetchRepo(String repoUrl) throws Exception {
-        fileCount = 0;
         String[] parts = repoUrl.split("/");
         String owner = parts[3];
         String repo = parts[4];
@@ -43,7 +45,8 @@ public class GithubService {
         ObjectMapper mapper = new ObjectMapper();
 
         // call recursive function
-        processFile(apiUrl, allBugs, allImprovements, mapper);
+        AtomicInteger fileCount = new AtomicInteger(0);
+        processDirectory(apiUrl, allBugs, allImprovements, mapper, fileCount);
 
         Map<String, Object> finalResponse = new HashMap<>();
         finalResponse.put("bugs", allBugs);
@@ -54,90 +57,78 @@ public class GithubService {
         return finalResponse;
     }
 
-    private void processFile(String apiUrl,
-                             List<Object> allBugs,
-                             List<Object> allImprovements,
-                             ObjectMapper mapper) throws Exception {
+    private HttpEntity<String> entity() {
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", "Bearer " + githubToken);
         headers.set("Accept", "application/vnd.github.v3+json");
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-        ResponseEntity<List> response = restTemplate.exchange(
-                apiUrl,
-                HttpMethod.GET,
-                entity,
-                List.class
-        );
+        return new HttpEntity<>(headers);
+    }
+
+    private boolean processDirectory(String apiUrl, List<Object> allBugs, List<Object> allImprovements, ObjectMapper mapper, AtomicInteger fileCount) throws Exception {
+        HttpEntity<String> entity = entity();
+        ResponseEntity<List> response = restTemplate.exchange(apiUrl, HttpMethod.GET, entity, List.class);
         List<Map<String, Object>> files = response.getBody();
 
 
         if (files == null) {
-            return;
+            return true;
         }
 
         for (Map<String, Object> file : files) {
             String type = file.get("type").toString();
 
-            // Recursioin
+            // Recursion
             if ("dir".equals(type)) {
-                if (fileCount >= 10) {
-                    return;
+                if (fileCount.get() >= 10) {
+                    return true;
                 }
-                processFile(file.get("url").toString(),
-                        allBugs,
-                        allImprovements,
-                        mapper);
-            }
-            // File processing
-            if ("file".equals(type) && file.get("name").toString().endsWith(".java")) {
-                String path = file.getOrDefault("path", "").toString();
-                if (!path.contains("/src/")) {
-                    continue;
-                }
-                if (fileCount >= 10) {
-                    return;
-                }
-                fileCount++;
-                System.out.println("visiting file" + file.get("path"));
-                String fileName = file.get("name").toString();
-                String downloadUrl = file.get("download_url").toString();
-
-                ResponseEntity<String> fileResponse = restTemplate.exchange(
-                        downloadUrl,
-                        HttpMethod.GET,
-                        entity,
-                        String.class
-                );
-                String code = fileResponse.getBody();
-                System.out.println("processing java file " + fileName);
-                if (code.length() > 3000) {
-                    code = code.substring(0, 3000);
-                }
-
-                String review = ollamaClient.reviewCode(code);
-
-                try {
-                    Map<String, Object> parsed = mapper.readValue(review, Map.class);
-                    List<?> bugs = (List<?>) parsed.getOrDefault("bugs", new ArrayList<>());
-                    List<?> improvments = (List<?>) parsed.getOrDefault("improvements", new ArrayList<>());
-
-                    for (Object bug : bugs) {
-                        Map<String, Object> bugMap = new HashMap<>();
-                        bugMap.put("file", fileName);
-                        bugMap.put("issue", bug);
-                        allBugs.add(bugMap);
-                    }
-
-                    for (Object imp : improvments) {
-                        Map<String, Object> impMap = new HashMap<>();
-                        impMap.put("file", fileName);
-                        impMap.put("suggestion", imp);
-                        allImprovements.add(impMap);
-                    }
-                } catch (Exception e) {
-                    System.out.println("parsing failed for file" + fileName);
-                }
+                if (processDirectory(file.get("url").toString(), allBugs, allImprovements, mapper, fileCount))
+                    return true;
+            } else if ("file".equals(type)) {
+                if (processJavaFile(file, allBugs, allImprovements, mapper, fileCount))
+                    return true;
             }
         }
+        return false;
+    }
+
+    private boolean processJavaFile(Map<String, Object> file, List<Object> allBugs, List<Object> allImprovements, ObjectMapper mapper, AtomicInteger fileCount) {
+        String name = file.get("name").toString();
+        if (!name.endsWith(".java")) return false;
+        String downloadUrl = file.get("download_url").toString();
+        if (fileCount.incrementAndGet() > 10) {
+            return true;
+        }
+        try {
+            String rawCode = restTemplate.getForObject(downloadUrl, String.class);
+            if (rawCode == null) {
+                return false;
+            }
+            String code = rawCode.length() > 3000 ? rawCode.substring(0, 3000) : rawCode;
+
+            String review = ollamaClient.reviewCode(code);
+
+            Map<String, Object> parsed = mapper.readValue(review, Map.class);
+
+            List<?> bugs = (List<?>) parsed.getOrDefault("bugs", new ArrayList<>());
+            List<?> improvements = (List<?>) parsed.getOrDefault("improvements", new ArrayList<>());
+
+            for (Object bug : bugs) {
+                Map<String, Object> bugMap = new HashMap<>();
+                bugMap.put("file", name);
+                bugMap.put("issue", bug);
+                allBugs.add(bugMap);
+            }
+
+            for (Object imp : improvements) {
+                Map<String, Object> impMap = new HashMap<>();
+                impMap.put("file", name);
+                impMap.put("suggestion", imp);
+                allImprovements.add(impMap);
+            }
+        } catch (Exception e) {
+            log.error("error in processing the file: {}",  name, e);
+        }
+        return false;
     }
 }
