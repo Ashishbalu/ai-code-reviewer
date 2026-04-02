@@ -11,10 +11,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.net.URI;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class GithubService {
     private final OllamaClient ollamaClient;
+    ExecutorService executorService = Executors.newFixedThreadPool(5);
 
 
     @Value("${github.token}")
@@ -34,14 +36,15 @@ public class GithubService {
     private final RestTemplate restTemplate = new RestTemplate();
 
     public Map<String, Object> fetchRepo(String repoUrl) throws Exception {
+        URI uri = new URI().getPath();
         String[] parts = repoUrl.split("/");
         String owner = parts[3];
         String repo = parts[4];
 
         String apiUrl = "https://api.github.com/repos/" + owner + "/" + repo + "/contents";
 
-        List<Object> allBugs = new ArrayList<>();
-        List<Object> allImprovements = new ArrayList<>();
+        List<Object> allBugs = Collections.synchronizedList(new ArrayList<>());
+        List<Object> allImprovements = Collections.synchronizedList(new ArrayList<>());
         ObjectMapper mapper = new ObjectMapper();
 
         // call recursive function
@@ -53,7 +56,6 @@ public class GithubService {
         finalResponse.put("improvements", allImprovements);
         finalResponse.put("time_complexity", "aggregated");
         finalResponse.put("space_complexity", "aggregated");
-        finalResponse.put("rating", "8/10");
         return finalResponse;
     }
 
@@ -68,6 +70,7 @@ public class GithubService {
         HttpEntity<String> entity = entity();
         ResponseEntity<List> response = restTemplate.exchange(apiUrl, HttpMethod.GET, entity, List.class);
         List<Map<String, Object>> files = response.getBody();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
 
 
         if (files == null) {
@@ -85,10 +88,13 @@ public class GithubService {
                 if (processDirectory(file.get("url").toString(), allBugs, allImprovements, mapper, fileCount))
                     return true;
             } else if ("file".equals(type)) {
-                if (processJavaFile(file, allBugs, allImprovements, mapper, fileCount))
-                    return true;
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    processJavaFile(file, allBugs, allImprovements, mapper, fileCount);
+                }, executorService);
+                futures.add(future);
             }
         }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         return false;
     }
 
@@ -127,7 +133,7 @@ public class GithubService {
                 allImprovements.add(impMap);
             }
         } catch (Exception e) {
-            log.error("error in processing the file: {}",  name, e);
+            log.error("error in processing the file: {}", name, e);
         }
         return false;
     }
