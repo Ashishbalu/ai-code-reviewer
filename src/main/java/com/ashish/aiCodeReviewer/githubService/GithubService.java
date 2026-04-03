@@ -4,16 +4,10 @@ import com.ashish.aiCodeReviewer.ai.OllamaClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.net.URI;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -23,20 +17,23 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class GithubService {
     private final OllamaClient ollamaClient;
+    private final CodeAnalysisService codeAnalysisService;
+    private final GithubTraversalService githubTraversalService;
     ExecutorService executorService = Executors.newFixedThreadPool(5);
 
 
     @Value("${github.token}")
     private String githubToken;
 
-    public GithubService(OllamaClient ollamaClient) {
+    public GithubService(OllamaClient ollamaClient, CodeAnalysisService codeAnalysisService, GithubTraversalService githubTraversalService) {
         this.ollamaClient = ollamaClient;
+        this.codeAnalysisService = codeAnalysisService;
+        this.githubTraversalService = githubTraversalService;
     }
 
     private final RestTemplate restTemplate = new RestTemplate();
 
     public Map<String, Object> fetchRepo(String repoUrl) throws Exception {
-        URI uri = new URI().getPath();
         String[] parts = repoUrl.split("/");
         String owner = parts[3];
         String repo = parts[4];
@@ -47,94 +44,17 @@ public class GithubService {
         List<Object> allImprovements = Collections.synchronizedList(new ArrayList<>());
         ObjectMapper mapper = new ObjectMapper();
 
-        // call recursive function
-        AtomicInteger fileCount = new AtomicInteger(0);
-        processDirectory(apiUrl, allBugs, allImprovements, mapper, fileCount);
+        AtomicInteger count = new AtomicInteger();
 
-        Map<String, Object> finalResponse = new HashMap<>();
-        finalResponse.put("bugs", allBugs);
-        finalResponse.put("improvements", allImprovements);
-        finalResponse.put("time_complexity", "aggregated");
-        finalResponse.put("space_complexity", "aggregated");
-        return finalResponse;
-    }
+        //Phase 1
+        List<Map<String, Object>> javaFiles = githubTraversalService.collectJavaFiles(apiUrl, count);
 
-    private HttpEntity<String> entity() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("Authorization", "Bearer " + githubToken);
-        headers.set("Accept", "application/vnd.github.v3+json");
-        return new HttpEntity<>(headers);
-    }
+        //Phase 2
+        codeAnalysisService.processFile(javaFiles, allBugs, allImprovements, mapper);
+        Map<String, Object> response = new HashMap<>();
+        response.put("bugs", allBugs);
+        response.put("improvements", allImprovements);
 
-    private boolean processDirectory(String apiUrl, List<Object> allBugs, List<Object> allImprovements, ObjectMapper mapper, AtomicInteger fileCount) throws Exception {
-        HttpEntity<String> entity = entity();
-        ResponseEntity<List> response = restTemplate.exchange(apiUrl, HttpMethod.GET, entity, List.class);
-        List<Map<String, Object>> files = response.getBody();
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-
-        if (files == null) {
-            return true;
-        }
-
-        for (Map<String, Object> file : files) {
-            String type = file.get("type").toString();
-
-            // Recursion
-            if ("dir".equals(type)) {
-                if (fileCount.get() >= 10) {
-                    return true;
-                }
-                if (processDirectory(file.get("url").toString(), allBugs, allImprovements, mapper, fileCount))
-                    return true;
-            } else if ("file".equals(type)) {
-                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                    processJavaFile(file, allBugs, allImprovements, mapper, fileCount);
-                }, executorService);
-                futures.add(future);
-            }
-        }
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-        return false;
-    }
-
-    private boolean processJavaFile(Map<String, Object> file, List<Object> allBugs, List<Object> allImprovements, ObjectMapper mapper, AtomicInteger fileCount) {
-        String name = file.get("name").toString();
-        if (!name.endsWith(".java")) return false;
-        String downloadUrl = file.get("download_url").toString();
-        if (fileCount.incrementAndGet() > 10) {
-            return true;
-        }
-        try {
-            String rawCode = restTemplate.getForObject(downloadUrl, String.class);
-            if (rawCode == null) {
-                return false;
-            }
-            String code = rawCode.length() > 3000 ? rawCode.substring(0, 3000) : rawCode;
-
-            String review = ollamaClient.reviewCode(code);
-
-            Map<String, Object> parsed = mapper.readValue(review, Map.class);
-
-            List<?> bugs = (List<?>) parsed.getOrDefault("bugs", new ArrayList<>());
-            List<?> improvements = (List<?>) parsed.getOrDefault("improvements", new ArrayList<>());
-
-            for (Object bug : bugs) {
-                Map<String, Object> bugMap = new HashMap<>();
-                bugMap.put("file", name);
-                bugMap.put("issue", bug);
-                allBugs.add(bugMap);
-            }
-
-            for (Object imp : improvements) {
-                Map<String, Object> impMap = new HashMap<>();
-                impMap.put("file", name);
-                impMap.put("suggestion", imp);
-                allImprovements.add(impMap);
-            }
-        } catch (Exception e) {
-            log.error("error in processing the file: {}", name, e);
-        }
-        return false;
+        return response;
     }
 }
