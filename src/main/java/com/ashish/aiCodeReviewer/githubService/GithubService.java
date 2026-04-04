@@ -1,12 +1,11 @@
 package com.ashish.aiCodeReviewer.githubService;
 
-import com.ashish.aiCodeReviewer.ai.OllamaClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -16,7 +15,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 
 public class GithubService {
-    private final OllamaClient ollamaClient;
     private final CodeAnalysisService codeAnalysisService;
     private final GithubTraversalService githubTraversalService;
     ExecutorService executorService = Executors.newFixedThreadPool(5);
@@ -25,16 +23,15 @@ public class GithubService {
     @Value("${github.token}")
     private String githubToken;
 
-    public GithubService(OllamaClient ollamaClient, CodeAnalysisService codeAnalysisService, GithubTraversalService githubTraversalService) {
-        this.ollamaClient = ollamaClient;
+    public GithubService(CodeAnalysisService codeAnalysisService, GithubTraversalService githubTraversalService) {
         this.codeAnalysisService = codeAnalysisService;
         this.githubTraversalService = githubTraversalService;
     }
 
-    private final RestTemplate restTemplate = new RestTemplate();
 
     public Map<String, Object> fetchRepo(String repoUrl) throws Exception {
-        String[] parts = repoUrl.split("/");
+        URI uri = new URI(repoUrl);
+        String[] parts = uri.getPath().split("/");
         String owner = parts[3];
         String repo = parts[4];
 

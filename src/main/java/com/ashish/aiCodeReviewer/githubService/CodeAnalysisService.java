@@ -20,7 +20,7 @@ public class CodeAnalysisService {
     private final OllamaClient ollamaClient;
 
     private final RestTemplate restTemplate = new RestTemplate();
-    ExecutorService executorService = Executors.newFixedThreadPool(5);
+    private final ExecutorService executorService = Executors.newFixedThreadPool(5);
 
     public CodeAnalysisService(OllamaClient ollamaClient){
         this.ollamaClient = ollamaClient;
@@ -39,12 +39,11 @@ public class CodeAnalysisService {
             futures.add(future);
         }
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-        executorService.shutdown();
     }
 
     private void processJavaFiles(Map<String, Object> file,
                                   List<Object> allBugs,
-                                  List<Object> allImprvements,
+                                  List<Object> allImprovements,
                                   ObjectMapper mapper){
         String name = file.get("name").toString();
         if (!name.endsWith(".java")) return;
@@ -77,10 +76,10 @@ public class CodeAnalysisService {
                 Map<String, Object> impMap = new HashMap<>();
                 impMap.put("file" , name);
                 impMap.put("suggestion", imp);
-                allImprvements.add(impMap);
+                allImprovements.add(impMap);
             }
         }catch (Exception e){
-            log.error("error in parsing: " + name);
+            log.error("Error processing file: {}", name, e);
         }
     }
 }
