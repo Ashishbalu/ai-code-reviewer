@@ -20,6 +20,7 @@ public class CodeAnalysisService {
     private final OllamaClient ollamaClient;
 
     private final RestTemplate restTemplate = new RestTemplate();
+    ExecutorService executorService = Executors.newFixedThreadPool(5);
 
     public CodeAnalysisService(OllamaClient ollamaClient){
         this.ollamaClient = ollamaClient;
@@ -29,7 +30,6 @@ public class CodeAnalysisService {
                             List<Object> allBugs,
                             List<Object> allImprovements,
                             ObjectMapper mapper){
-        ExecutorService executorService = Executors.newFixedThreadPool(5);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (Map<String, Object> file : files){
@@ -49,7 +49,7 @@ public class CodeAnalysisService {
         String name = file.get("name").toString();
         if (!name.endsWith(".java")) return;
 
-        String downloadUrl = file.get("download_Url").toString();
+        String downloadUrl = file.get("download_url").toString();
 
         try {
             String rawCode = restTemplate.getForObject(downloadUrl, String.class);
@@ -61,7 +61,7 @@ public class CodeAnalysisService {
                     : rawCode;
 
             String review = ollamaClient.reviewCode(code);
-            Map<String, Object> parsed = new HashMap<>();
+            Map<String, Object> parsed = mapper.readValue(review, Map.class);
 
             List<?> bugs = (List<?>) parsed.getOrDefault("bugs", new ArrayList<>());
             List<?> improvements = (List<?>) parsed.getOrDefault("improvements", new ArrayList<>());
