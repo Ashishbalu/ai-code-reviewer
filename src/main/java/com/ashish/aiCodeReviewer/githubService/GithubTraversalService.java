@@ -30,7 +30,7 @@ public class GithubTraversalService {
     public List<Map<String, Object>> collectJavaFiles(String apiUrl, AtomicInteger count) throws Exception {
         List<Map<String, Object>> javaFiles = new ArrayList<>();
 
-        if (count.get() >= 10) {
+        if (count.get() >= 3) {
             return javaFiles;
         }
         ResponseEntity<List> response = restTemplate.exchange(
@@ -43,7 +43,7 @@ public class GithubTraversalService {
         if (files == null) return javaFiles;
 
         for (Map<String, Object> file : files) {
-            if (count.get() >= 10) break;
+            if (count.get() >= 3) break;
 
             String type = file.get("type").toString();
 
